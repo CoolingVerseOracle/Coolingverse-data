@@ -17,3 +17,10 @@
 * `Geopandas`를 활용한 100M 단위 도심 활성 격자(Active Grid) 공간 매핑
 * `scipy.spatial.cKDTree`를 도입하여 12만 개 격자와 최단 거리 대기질 측정소 초고속 매핑 
 * 반복문(`iterrows`)을 배제한 완벽한 벡터화(Vectorization) 연산으로 24시간 위험 지수 산출 속도 99% 단축
+
+## ⚙️ 기술 스택 (Tech Stack)
+* **Language:** Python
+* **Data Processing:** Pandas, NumPy
+* **Geospatial Analysis:** GeoPandas, SciPy (cKDTree), Shapely
+* **Visualization:** Folium, Kakao Maps API (Heatmap.js)
+* **Environment:** Google Colab, GitHub
