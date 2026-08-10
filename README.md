@@ -37,14 +37,10 @@
 * **Visualization:** `folium`, `matplotlib`, `seaborn`, Kakao Maps API (Heatmap.js)
 * **Environment & API:** Google Colab, GitHub, Kakao Local API
 
-## 📁 프로젝트 구조 (Directory Structure)
+## 📁 프로젝트 구조 (Project Structure)
 ```text
-├── data/
-│   ├── raw/                      # 원본 데이터 (단속내역, 아파트정보 등 - Git 제외)
-│   └── processed/                # 정제 및 격자 매핑 완료 데이터 (ERD 규격)
-├── src/
-│   ├── 01_Geocoding_and_Cleansing.ipynb
-│   ├── 02_Air_Quality_Preprocessing.ipynb
-│   ├── 03_Spatial_Mapping_and_ERD.ipynb
-│   └── 04_Risk_Index_Modeling.ipynb
-└── README.md
+├── README.md
+├── 01_Geocoding_and_Cleansing.ipynb
+├── 02_Air_Quality_Preprocessing.ipynb
+├── 03_Spatial_Mapping_and_ERD.ipynb
+└── 04_Risk_Index_Modeling.ipynb
