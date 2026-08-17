@@ -55,3 +55,25 @@
 ├── 03_Air_Quality_Pipeline.ipynb
 ├── 04_Grid_Preprocessing.ipynb
 └── 05_Risk_Index_Modeling.ipynb
+```
+
+## 운영 CLI와 지역 격리
+
+노트북은 분석 근거로 보존하고 `src/coolingverse_pipeline`을 운영 적재에 사용합니다. 각 실행은 한 지역만
+입력받으며 정규화, 대기질 fallback, KD-Tree, 24시간 확장을 모두
+`region_code × analysis_year × analysis_month` 경계 안에서 수행합니다.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+ruff check src tests
+pytest
+```
+
+비공개 Object Storage 버킷 `coolingverse-data`의 원천 버전에는 `manifest.json`을 두며, `grids`,
+`enforcement`, `apartments`, `air_quality` CSV의 버킷 상대 경로와 SHA-256을 기록합니다. 실패한 단속
+지오코딩 행은 삭제하지 않고 `region_code`를 유지한 채 `grid_code`만 비웁니다.
+
+운영 실행은 GitHub Actions의 `Production data pipeline`을 수동 실행합니다. 품질 검사와 ADB staging
+적재가 성공한 뒤 활성 포인터만 전환하고, 백엔드 readiness 실패 시 이전 포인터로 복구합니다.

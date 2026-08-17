@@ -1,0 +1,123 @@
+name: Production data pipeline
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 활성 지역 자연키
+        type: choice
+        options: [pangyo, bucheon]
+        required: true
+      analysis_year:
+        description: 분석 연도
+        type: number
+        default: 2025
+        required: true
+      source_version:
+        description: Object Storage 원천 버전
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: coolingverse-production-operations
+  cancel-in-progress: false
+jobs:
+  build-load-activate:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+      OCI_CLI_REGION: ${{ vars.OCI_REGION }}
+      OCI_CLI_KEY_FILE: ${{ github.workspace }}/.secrets/oci_api_key.pem
+      OCI_NAMESPACE: ${{ secrets.OCI_OBJECT_NAMESPACE }}
+      BUCKET: coolingverse-data
+      ADB_USERNAME: ${{ secrets.ADB_USERNAME }}
+      ADB_PASSWORD: ${{ secrets.ADB_PASSWORD }}
+      ADB_DSN: ${{ secrets.ADB_DSN }}
+      ADB_WALLET_PASSWORD: ${{ secrets.ADB_WALLET_PASSWORD }}
+      ADB_WALLET_DIR: ${{ github.workspace }}/.secrets/wallet
+      KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install non-container tools
+        run: pip install -e . oci-cli
+      - name: Configure OCI credentials and ADB wallet
+        run: |
+          set -euo pipefail
+          install -d -m 700 .secrets "$ADB_WALLET_DIR"
+          printf '%s' '${{ secrets.OCI_API_PRIVATE_KEY }}' > "$OCI_CLI_KEY_FILE"
+          chmod 600 "$OCI_CLI_KEY_FILE"
+          printf '%s' '${{ secrets.ADB_WALLET_BASE64 }}' | base64 --decode > .secrets/wallet.zip
+          unzip -q .secrets/wallet.zip -d "$ADB_WALLET_DIR"
+      - name: Download immutable source and common grid
+        run: |
+          set -euo pipefail
+          mkdir -p input
+          oci os object bulk-download -ns "$OCI_NAMESPACE" -bn "$BUCKET" \
+            --prefix "raw/${{ inputs.region }}/${{ inputs.analysis_year }}/${{ inputs.source_version }}/" \
+            --download-dir input --no-overwrite
+          oci os object bulk-download -ns "$OCI_NAMESPACE" -bn "$BUCKET" \
+            --prefix "raw/common/grid/" --download-dir input --no-overwrite
+          oci os object bulk-download -ns "$OCI_NAMESPACE" -bn "$BUCKET" \
+            --prefix "reference/${{ inputs.region }}/geocode-cache/" --download-dir input --no-overwrite
+          oci os object get -ns "$OCI_NAMESPACE" -bn "$BUCKET" \
+            --name "published/${{ inputs.region }}/${{ inputs.analysis_year }}/current.json" \
+            --file input/previous-current.json || true
+      - name: Transform and enforce quality gates
+        id: pipeline
+        run: |
+          set -euo pipefail
+          manifest="input/raw/${{ inputs.region }}/${{ inputs.analysis_year }}/${{ inputs.source_version }}/manifest.json"
+          coolingverse-pipeline verify-manifest --manifest "$manifest" --input-dir input
+          if [ -s input/previous-current.json ]; then
+            coolingverse-pipeline build --manifest "$manifest" --input-dir input --output-dir output \
+              --previous-metadata input/previous-current.json
+          else
+            coolingverse-pipeline build --manifest "$manifest" --input-dir input --output-dir output
+          fi
+          echo "run_id=$(jq -r .pipeline_run_id output/run.json)" >> "$GITHUB_OUTPUT"
+      - name: Upload reproducible run artifacts
+        run: |
+          oci os object bulk-upload -ns "$OCI_NAMESPACE" -bn "$BUCKET" --src-dir output \
+            --object-prefix "runs/${{ steps.pipeline.outputs.run_id }}/${{ inputs.region }}/" --overwrite
+          if [ -d "input/reference/${{ inputs.region }}/geocode-cache" ]; then
+            oci os object bulk-upload -ns "$OCI_NAMESPACE" -bn "$BUCKET" \
+              --src-dir "input/reference/${{ inputs.region }}/geocode-cache" \
+              --object-prefix "reference/${{ inputs.region }}/geocode-cache/" --overwrite
+          fi
+      - name: Load staging rows and atomically activate
+        run: coolingverse-pipeline load --output-dir output
+      - name: Restart backend and verify readiness
+        id: readiness
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.DEPLOY_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_USER }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -o BatchMode=yes "$SSH_USER@$SSH_HOST" 'sudo systemctl restart coolingverse-backend'
+          for _ in $(seq 1 12); do
+            ssh -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
+              'curl -fsS --max-time 5 http://127.0.0.1:8080/api/actuator/health/readiness' && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: Roll back active pointer after readiness failure
+        if: failure() && steps.readiness.outcome == 'failure'
+        run: coolingverse-pipeline rollback --region '${{ inputs.region }}' --year '${{ inputs.analysis_year }}'
+      - name: Publish current version pointer
+        if: success()
+        run: |
+          oci os object put -ns "$OCI_NAMESPACE" -bn "$BUCKET" --force \
+            --name "published/${{ inputs.region }}/${{ inputs.analysis_year }}/current.json" --file output/run.json
