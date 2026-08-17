@@ -26,6 +26,16 @@ ANALYSIS_YEAR = 2025
 ANALYSIS_MONTH = 10
 WEEKDAY_NAMES = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"]
 
+# 유휴율 — apartments.open_count = total_parking * IDLE_RATE.
+# 평일 낮 통근으로 빠져나가 비는 주차면 비율이며, 분당 29.10% / 부천 30.10% / 군포 31.36%에 대응한다.
+#
+# 분모는 반드시 '통근' 인구여야 한다. 통학 인구(안양 54,368명)를 포함하면 분담률이 34.28%로
+# 과소 산출되고, 인접한 군포(39.80%)와 5.5%p나 벌어져 타 지역과 방식이 어긋난다.
+# 통근만 쓰면 40.72% vs 39.80%로 0.92%p 차이에 그친다.
+APARTMENT_COMMUTE_RATE = 0.788  # 아파트 통근율. 부천·군포에 공통 적용된 기존 상수를 그대로 쓴다.
+CAR_COMMUTE_SHARE = 105_529 / 259_171  # KOSIS 인구주택총조사(2020) 안양시 통근 기준 승용차·승합차
+IDLE_RATE = APARTMENT_COMMUTE_RATE * CAR_COMMUTE_SHARE  # 0.3209
+
 GRID_COLUMNS = [
     "region_code", "grid_code", "center_lat", "center_lng",
     "min_lat", "min_lng", "max_lat", "max_lng", "area_km2", "effective_area_km2",

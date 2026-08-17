@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
-from prepare_pyeongchon_inputs import ANALYSIS_MONTH, ANALYSIS_YEAR, collapse_to_single_month
+from prepare_pyeongchon_inputs import (
+    ANALYSIS_MONTH,
+    ANALYSIS_YEAR,
+    CAR_COMMUTE_SHARE,
+    IDLE_RATE,
+    collapse_to_single_month,
+)
 
 # 2025-10의 실제 단속일. 개천절(3), 추석 연휴(6~8), 한글날(9), 주말이 빠진 18일.
 OCTOBER_DAYS = [1, 2, 10, 13, 14, 15, 16, 17, 20, 21, 22, 23, 24, 27, 28, 29, 30, 31]
@@ -39,6 +45,15 @@ def test_assigned_days_come_only_from_the_target_pool() -> None:
     result = collapse_to_single_month(source, OCTOBER_DAYS)
     assert set(result.dt.day) <= set(OCTOBER_DAYS)
     assert result.dt.weekday.max() <= 4
+
+
+def test_idle_rate_derivation() -> None:
+    """유휴율은 통근 기준으로 산출해야 타 지역과 방식이 맞는다."""
+    assert CAR_COMMUTE_SHARE == pytest.approx(0.4072, abs=1e-4)
+    assert IDLE_RATE == pytest.approx(0.3209, abs=1e-4)
+    # 통학 인구를 분모에 넣으면 인접 군포(39.80%)와 5%p 넘게 벌어진다.
+    assert abs(CAR_COMMUTE_SHARE - 0.398) < 0.02
+    assert abs(107_494 / 313_539 - 0.398) > 0.05
 
 
 def test_empty_day_pool_is_rejected() -> None:
