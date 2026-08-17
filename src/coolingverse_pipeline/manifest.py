@@ -17,7 +17,7 @@ class InputManifest:
     def load(cls, path: Path) -> InputManifest:
         raw = json.loads(path.read_text(encoding="utf-8"))
         region = raw["region_code"]
-        if region not in {"pangyo", "bucheon"}:
+        if region not in {"pangyo", "bucheon", "pyeongchon"}:
             raise ValueError(f"지원하지 않는 활성 지역: {region}")
         return cls(region, int(raw["analysis_year"]), raw["source_version"], raw["files"])
 

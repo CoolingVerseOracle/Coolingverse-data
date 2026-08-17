@@ -6,9 +6,11 @@ import pytest
 from coolingverse_pipeline.quality import validate
 from coolingverse_pipeline.risk import calculate_region_risk, stable_risk_hash
 
+BASE_COORDS = {"pangyo": (37.4, 127.1), "bucheon": (37.5, 126.76), "pyeongchon": (37.394, 126.963)}
+
 
 def inputs(region: str, demand_multiplier: int = 1) -> tuple[pd.DataFrame, ...]:
-    base_lat, base_lng = ((37.4, 127.1) if region == "pangyo" else (37.5, 126.76))
+    base_lat, base_lng = BASE_COORDS[region]
     grids = pd.DataFrame({
         "region_code": [region, region], "grid_code": ["LOCAL-1", "LOCAL-2"],
         "center_lat": [base_lat, base_lat + 0.01], "center_lng": [base_lng, base_lng + 0.01],
@@ -46,6 +48,31 @@ def test_same_local_grid_id_does_not_collide_across_regions() -> None:
     keys = ["pipeline_run_id", "region_code", "grid_code", "analysis_year", "analysis_month", "hour_of_day"]
     assert not combined.duplicated(keys).any()
     assert len(combined) == 96
+
+
+def test_pyeongchon_addition_does_not_change_pangyo_hash() -> None:
+    pangyo = calculate("pangyo")
+    combined = pd.concat([pangyo, calculate("pyeongchon")], ignore_index=True)
+    assert stable_risk_hash(combined, "pangyo") == stable_risk_hash(pangyo, "pangyo")
+
+
+def test_annual_collapse_yields_single_month_with_summed_demand() -> None:
+    """평촌은 연간 통합 1건이다. 전 행을 한 달에 모으면 수요압력이 연간 합계 순위를 따른다."""
+    grids, _, apartments, air = inputs("pyeongchon")
+    enforcement = pd.DataFrame({
+        "region_code": ["pyeongchon"] * 4,
+        "grid_code": ["LOCAL-1", "LOCAL-1", "LOCAL-1", "LOCAL-2"],
+        "enforced_at": ["2025-10-02", "2025-10-15", "2025-10-31", "2025-10-08"],
+    })
+    result = calculate_region_risk(
+        region_code="pyeongchon", analysis_year=2025, pipeline_run_id="annual",
+        grids=grids, enforcement=enforcement, apartments=apartments, air_quality=air,
+    )
+    assert set(result["analysis_month"]) == {10}
+    assert len(result) == 2 * 24
+    at14 = result.query("hour_of_day == 14").set_index("grid_code")
+    assert at14.loc["LOCAL-1", "demand_pressure"] == 1.0
+    assert at14.loc["LOCAL-2", "demand_pressure"] == 0.0
 
 
 def test_cross_region_grid_reference_is_rejected() -> None:

@@ -5,7 +5,7 @@ on:
       region:
         description: 활성 지역 자연키
         type: choice
-        options: [pangyo, bucheon]
+        options: [pangyo, bucheon, pyeongchon]
         required: true
       analysis_year:
         description: 분석 연도

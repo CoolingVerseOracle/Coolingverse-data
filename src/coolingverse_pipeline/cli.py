@@ -106,7 +106,7 @@ def main() -> None:
     load_parser = sub.add_parser("load")
     load_parser.add_argument("--output-dir", type=Path, required=True)
     rollback = sub.add_parser("rollback")
-    rollback.add_argument("--region", required=True, choices=["pangyo", "bucheon"])
+    rollback.add_argument("--region", required=True, choices=["pangyo", "bucheon", "pyeongchon"])
     rollback.add_argument("--year", type=int, required=True)
     args = parser.parse_args()
 

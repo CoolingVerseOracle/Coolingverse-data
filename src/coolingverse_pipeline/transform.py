@@ -53,7 +53,7 @@ def _geocode_missing(
     api_key = os.environ.get("KAKAO_REST_API_KEY")
     if not api_key:
         return frame
-    display = {"pangyo": "성남시 분당구", "bucheon": "부천시"}[region_code]
+    display = {"pangyo": "성남시 분당구", "bucheon": "부천시", "pyeongchon": "안양시 동안구"}[region_code]
 
     def kakao(address: str) -> tuple[float, float] | None:
         response = requests.get(
