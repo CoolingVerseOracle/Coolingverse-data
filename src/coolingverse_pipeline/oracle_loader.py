@@ -8,6 +8,10 @@ from pathlib import Path
 import oracledb
 import pandas as pd
 
+# 문자열로 두면 Oracle이 세션 NLS_DATE_FORMAT으로 해석하려다 ORA-01861로 죽는다.
+# datetime 객체로 바인딩하면 드라이버가 네이티브 DATE/TIMESTAMP로 넘긴다.
+DATETIME_COLUMNS = {"enforcement": ["enforced_at"], "air_quality": ["measured_at"]}
+
 
 def _records(frame: pd.DataFrame, columns: list[str]) -> list[dict]:
     """이름 바인드용 레코드로 변환한다. 결측은 None으로 바꿔 Oracle NULL로 넣는다.
@@ -137,6 +141,9 @@ def _replace_source_rows(cursor: oracledb.Cursor, table: str, run_id: str, regio
         "air_quality": ["grid_code", "station_name", "lat", "lng", "measured_at", "analysis_month", "day_of_week", "hour_of_day", "no2", "co"],
     }
     columns = specs[table]
+    frame = frame.copy()
+    for column in DATETIME_COLUMNS.get(table, []):
+        frame[column] = pd.to_datetime(frame[column], errors="raise")
     db_columns = ["month" if c == "analysis_month" else "hour" if c == "hour_of_day" else c for c in columns]
     grid_expr = "(SELECT grid_id FROM grids WHERE region_code=:region AND grid_code=:grid_code)"
     non_grid = columns[1:]

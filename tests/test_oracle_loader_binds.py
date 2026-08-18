@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 import pandas as pd
 import pytest
@@ -112,6 +113,23 @@ def test_every_named_bind_is_supplied(loaded: FakeCursor) -> None:
                 continue
             missing = set(NAMED_BIND.findall(sql)) - set(row)
             assert not missing, f"바인드 누락 {sorted(missing)}\n{sql}"
+
+
+def test_date_columns_bind_as_datetime(loaded: FakeCursor) -> None:
+    """날짜는 문자열이 아니라 datetime으로 바인딩해야 한다.
+
+    문자열로 넘기면 Oracle이 세션 NLS_DATE_FORMAT(기본 DD-MON-RR)으로 해석하려다
+    ORA-01861로 죽는다.
+    """
+    checked = 0
+    for sql, params in loaded.calls:
+        for column in ("enforced_at", "measured_at"):
+            if not isinstance(params, list) or f":{column}" not in sql:
+                continue
+            for row in params:
+                assert isinstance(row[column], datetime), f"{column}이 {type(row[column]).__name__}로 바인딩됐다"
+                checked += 1
+    assert checked, "날짜 컬럼을 가진 문장을 하나도 검사하지 못했다"
 
 
 def test_positional_binds_are_never_repeated(loaded: FakeCursor) -> None:
