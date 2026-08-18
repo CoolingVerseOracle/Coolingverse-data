@@ -9,6 +9,16 @@ import oracledb
 import pandas as pd
 
 
+def _records(frame: pd.DataFrame, columns: list[str]) -> list[dict]:
+    """이름 바인드용 레코드로 변환한다. 결측은 None으로 바꿔 Oracle NULL로 넣는다.
+
+    번호 바인드(:1)는 thin 드라이버가 '출현 순서'로 세기 때문에 같은 값을 두 번 참조하면
+    바인드 개수가 어긋난다(DPY-4009). 이름 바인드는 반복 참조해도 안전하다.
+    """
+    selected = frame[columns]
+    return selected.where(pd.notna(selected), None).to_dict("records")
+
+
 @contextmanager
 def connect(*, user: str, password: str, dsn: str, wallet_dir: str, wallet_password: str) -> Iterator[oracledb.Connection]:
     connection = oracledb.connect(
@@ -36,27 +46,33 @@ def stage_and_activate(
                VALUES (:1,:2,:3,'STAGING',:4,:5,:6)""",
             [run_id, region_code, analysis_year, input_version, manifest_sha256, json.dumps(quality_report)],
         )
-        grids = pd.read_csv(grids_csv)
+        grids = pd.read_csv(grids_csv, dtype={"grid_code": str})
         cursor.executemany(
-            """MERGE INTO grids g USING (SELECT :1 region_code, :2 grid_code FROM dual) s
+            """MERGE INTO grids g USING (SELECT :region_code region_code, :grid_code grid_code FROM dual) s
                ON (g.region_code=s.region_code AND g.grid_code=s.grid_code)
                WHEN NOT MATCHED THEN INSERT
                  (region_code,district_id,grid_code,center_lat,center_lng,min_lat,min_lng,max_lat,max_lng,area_km2,effective_area_km2)
-               VALUES (:1,(SELECT district_id FROM districts WHERE region_code=:1),:2,:3,:4,:5,:6,:7,:8,:9,:10)""",
-            [tuple(row) for row in grids[["region_code", "grid_code", "center_lat", "center_lng", "min_lat", "min_lng",
-                                          "max_lat", "max_lng", "area_km2", "effective_area_km2"]].itertuples(index=False, name=None)],
+               VALUES (:region_code,(SELECT district_id FROM districts WHERE region_code=:region_code),:grid_code,
+                       :center_lat,:center_lng,:min_lat,:min_lng,:max_lat,:max_lng,:area_km2,:effective_area_km2)""",
+            _records(grids, ["region_code", "grid_code", "center_lat", "center_lng", "min_lat", "min_lng",
+                             "max_lat", "max_lng", "area_km2", "effective_area_km2"]),
         )
-        _replace_source_rows(cursor, "apartments", run_id, region_code, pd.read_csv(apartments_csv))
-        _replace_source_rows(cursor, "enforcement", run_id, region_code, pd.read_csv(enforcement_csv))
-        _replace_source_rows(cursor, "air_quality", run_id, region_code, pd.read_csv(air_csv))
-        risk = pd.read_csv(risk_csv)
-        risk_rows = [tuple(row) for row in risk.itertuples(index=False, name=None)]
+        code = {"grid_code": str}
+        _replace_source_rows(cursor, "apartments", run_id, region_code, pd.read_csv(apartments_csv, dtype=code))
+        _replace_source_rows(cursor, "enforcement", run_id, region_code, pd.read_csv(enforcement_csv, dtype=code))
+        _replace_source_rows(cursor, "air_quality", run_id, region_code, pd.read_csv(air_csv, dtype=code))
+        risk = pd.read_csv(risk_csv, dtype=code)
+        risk_rows = _records(risk, [
+            "pipeline_run_id", "region_code", "grid_code", "analysis_year", "analysis_month", "hour_of_day",
+            "demand_pressure", "supply_shortage", "traffic_congest", "env_sensitivity", "risk_score",
+        ])
         cursor.executemany(
             """INSERT INTO risk_index
                (pipeline_run_id,region_code,grid_id,analysis_year,analysis_month,hour_of_day,
                 demand_pressure,supply_shortage,traffic_congest,env_sensitivity,risk_score,batch_date)
-               SELECT :1,:2,g.grid_id,:4,:5,:6,:7,:8,:9,:10,:11,SYSDATE
-               FROM grids g WHERE g.region_code=:2 AND g.grid_code=:3""",
+               SELECT :pipeline_run_id,:region_code,g.grid_id,:analysis_year,:analysis_month,:hour_of_day,
+                      :demand_pressure,:supply_shortage,:traffic_congest,:env_sensitivity,:risk_score,SYSDATE
+               FROM grids g WHERE g.region_code=:region_code AND g.grid_code=:grid_code""",
             risk_rows,
         )
         if cursor.rowcount != len(risk_rows):
@@ -126,6 +142,5 @@ def _replace_source_rows(cursor: oracledb.Cursor, table: str, run_id: str, regio
     non_grid = columns[1:]
     query = (f"INSERT INTO {table} (pipeline_run_id,region_code,grid_id,{','.join(db_columns[1:])}) "
              f"VALUES (:run_id,:region,{grid_expr},{','.join(':'+c for c in non_grid)})")
-    rows = frame[columns].where(pd.notna(frame[columns]), None).to_dict("records")
-    for row in rows:
-        cursor.execute(query, {"run_id": run_id, "region": region, **row})
+    rows = [{"run_id": run_id, "region": region, **row} for row in _records(frame, columns)]
+    cursor.executemany(query, rows)
