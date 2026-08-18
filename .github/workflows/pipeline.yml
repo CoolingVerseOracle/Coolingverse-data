@@ -16,6 +16,11 @@ on:
         description: Object Storage 원천 버전
         type: string
         required: true
+      allow_grid_reselection:
+        description: 활동 격자 기준 변경 승인 (직전 승인본 대비 ±5% 행 게이트를 경고로 낮춤)
+        type: boolean
+        default: false
+        required: false
 permissions:
   contents: read
 concurrency:
@@ -75,11 +80,15 @@ jobs:
           set -euo pipefail
           manifest="input/raw/${{ inputs.region }}/${{ inputs.analysis_year }}/${{ inputs.source_version }}/manifest.json"
           coolingverse-pipeline verify-manifest --manifest "$manifest" --input-dir input
+          reselection=""
+          if [ '${{ inputs.allow_grid_reselection }}' = 'true' ]; then
+            reselection="--allow-grid-reselection"
+          fi
           if [ -s input/previous-current.json ]; then
             coolingverse-pipeline build --manifest "$manifest" --input-dir input --output-dir output \
-              --previous-metadata input/previous-current.json
+              --previous-metadata input/previous-current.json $reselection
           else
-            coolingverse-pipeline build --manifest "$manifest" --input-dir input --output-dir output
+            coolingverse-pipeline build --manifest "$manifest" --input-dir input --output-dir output $reselection
           fi
           echo "run_id=$(jq -r .pipeline_run_id output/run.json)" >> "$GITHUB_OUTPUT"
       - name: Upload reproducible run artifacts

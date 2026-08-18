@@ -22,8 +22,10 @@ class QualityReport:
 def validate(
     *, region_code: str, grids: pd.DataFrame, apartments: pd.DataFrame,
     enforcement: pd.DataFrame, air_quality: pd.DataFrame, risk: pd.DataFrame,
-    previous_table_rows: dict[str, int] | None = None,
+    previous_table_rows: dict[str, int] | None = None, allow_row_delta: bool = False,
 ) -> QualityReport:
+    """allow_row_delta: 격자 기준을 의도적으로 바꿀 때만 켠다. 행 수 급변을 실패가 아닌
+    경고로 낮추며, 다른 게이트(지역 혼입·중복키·범위·매칭률)는 그대로 강제된다."""
     failures: list[str] = []
     for name, frame in (("grids", grids), ("apartments", apartments), ("enforcement", enforcement),
                         ("air_quality", air_quality), ("risk", risk)):
@@ -67,7 +69,12 @@ def validate(
         delta = (table_rows[table] - previous) / previous
         deltas[table] = delta
         if abs(delta) > 0.05:
-            failures.append(f"{table}: 직전 승인본 대비 행 수 변화 {delta:.2%}")
+            message = f"{table}: 직전 승인본 대비 행 수 변화 {delta:.2%}"
+            if allow_row_delta:
+                # 승인된 격자 재선정 — 근거는 run.json의 grid_selection에 남는다
+                print(f"[허용된 행 수 변화] {message}")
+            else:
+                failures.append(message)
     if failures:
         raise ValueError("품질 게이트 실패:\n- " + "\n- ".join(failures))
     return QualityReport(region_code, len(risk), table_rows, apartment_rate, enforcement_rate, deltas, True)
