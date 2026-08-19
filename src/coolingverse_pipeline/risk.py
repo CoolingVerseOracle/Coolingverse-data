@@ -6,11 +6,23 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
 
+#: 시간대 교통 가중치 — 판교·부천·산본·일산을 산출한 기존 모델과 동일한 값.
+#: 교통 혼잡도는 이 값 자체가 아니라 격자 수요압박에 곱해지는 계수로 쓰인다(아래 참고).
 TRAFFIC_WEIGHTS = np.array([
-    0.15, 0.10, 0.08, 0.06, 0.08, 0.18, 0.45, 0.75,
-    1.00, 0.85, 0.65, 0.58, 0.55, 0.52, 0.55, 0.65,
-    0.78, 0.95, 0.90, 0.75, 0.58, 0.42, 0.30, 0.22,
+    0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.8, 1.3,
+    1.3, 1.3, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+    1.0, 1.3, 1.3, 1.3, 1.3, 0.8, 0.7, 0.7,
 ])
+#: 교통 가중치 정규화 분모(최댓값) — 계수를 0~1로 되돌린다.
+TRAFFIC_WEIGHT_MAX = 1.3
+
+#: 환경 민감도 환산 기준 농도 — 상대 정규화 대신 절대 기준 대비 비율로 환산한다.
+#: 측정소 수가 적은 지역에서 min-max를 쓰면 측정소 일주기가 0~1 전 범위를 차지해
+#: 시간 변동이 공간 민감도로 둔갑한다(평촌 진폭 28.3점의 주원인).
+NO2_REFERENCE_PPM = 0.075
+CO_REFERENCE_PPM = 1.79
+NO2_ENV_WEIGHT = 0.6
+CO_ENV_WEIGHT = 0.4
 
 
 def _minmax(values: pd.Series) -> pd.Series:
@@ -48,7 +60,11 @@ def _air_for_grids(grids: pd.DataFrame, air: pd.DataFrame, month: int) -> pd.Dat
         selected["hour_of_day"] = hour
         rows.append(selected)
     result = pd.concat(rows, ignore_index=True)
-    result["env_sensitivity"] = 0.5 * _minmax(result["no2"]) + 0.5 * _minmax(result["co"])
+    # 기준 농도 대비 절대 비율 — 지역·측정소 수와 무관하게 같은 척도를 쓴다
+    result["env_sensitivity"] = np.minimum(1.0, (
+        NO2_ENV_WEIGHT * result["no2"] / NO2_REFERENCE_PPM
+        + CO_ENV_WEIGHT * result["co"] / CO_REFERENCE_PPM
+    ))
     return result[["grid_code", "hour_of_day", "env_sensitivity"]]
 
 
@@ -82,10 +98,15 @@ def calculate_region_risk(
                   .dropna(subset=["grid_code"]).groupby("grid_code").size().rename("count").reset_index())
         base = grids[["region_code", "grid_code", "center_lat", "center_lng"]].merge(demand, how="left").merge(supply, how="left")
         base[["count", "open_count"]] = base[["count", "open_count"]].fillna(0)
-        base["demand_pressure"] = _minmax(base["count"])
+        # 로그 변환 후 정규화 — 단속이 극단적으로 몰린 격자 하나가 척도를 독점하는 것을 막는다
+        base["demand_pressure"] = _minmax(np.log1p(base["count"]))
         base["supply_shortage"] = 1.0 - _minmax(base["open_count"])
         hourly = base.merge(pd.DataFrame({"hour_of_day": range(24)}), how="cross")
-        hourly["traffic_congest"] = TRAFFIC_WEIGHTS[hourly["hour_of_day"].to_numpy(int)]
+        # 교통 혼잡도 = 격자 수요압박 × 시간 가중계수. 시간 가중치를 그대로 쓰면 전 격자가
+        # 같은 값이 되어 "격자 주변 도로 혼잡"이라는 정의가 사라진다.
+        hourly["traffic_congest"] = np.minimum(1.0, hourly["demand_pressure"] * (
+            TRAFFIC_WEIGHTS[hourly["hour_of_day"].to_numpy(int)] / TRAFFIC_WEIGHT_MAX
+        ))
         hourly = hourly.merge(_air_for_grids(base, air_quality, month), on=["grid_code", "hour_of_day"], how="left")
         hourly["analysis_year"] = analysis_year
         hourly["analysis_month"] = month
